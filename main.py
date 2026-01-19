@@ -1,15 +1,21 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-import os, re
+import os
+import re
 from openai import OpenAI
 
 app = FastAPI()
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ---- SESSION (demo purpose) ----
+# ---------------- CONFIG ----------------
+INTERRUPTS = ["who are you", "what is this", "hello", "hi"]
+EMERGENCY_WORDS = ["bleeding", "blood", "severe pain", "emergency"]
+
+# Simple in-memory session (single user demo)
 session = {
     "stage": "start",
     "name": None,
@@ -18,68 +24,76 @@ session = {
     "time": None
 }
 
-SYSTEM_PROMPT = """
-You are a polite AI dental clinic receptionist.
-Your ONLY task is to help with appointment booking.
-Do not repeat questions.
-Reply in the user's language.
-"""
-
+# ---------------- ROUTES ----------------
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    return open("static/index.html", encoding="utf-8").read()
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
 
 @app.post("/chat")
 async def chat(request: Request):
     data = await request.json()
-    raw_message = data.get("message", "").strip()
-    msg = raw_message.lower()
+    user_message = data.get("message", "").strip()
+    msg = user_message.lower()
 
-    # ---------- START ----------
+    # -------- EMERGENCY (TOP PRIORITY) --------
+    if any(word in msg for word in EMERGENCY_WORDS):
+        return JSONResponse({
+            "reply": "🚨 This sounds urgent. Please visit the nearest dental clinic or emergency room immediately. Our team will contact you shortly."
+        })
+
+    # -------- WHO ARE YOU / GREETING --------
+    if any(word in msg for word in INTERRUPTS):
+        return JSONResponse({
+            "reply": "😊 I am the AI assistant of our dental clinic. I can help you book appointments or guide you in emergencies."
+        })
+
+    # -------- BOOKING FLOW --------
     if session["stage"] == "start":
         session["stage"] = "name"
-        return JSONResponse({"reply": "Sure 🙂 May I have your **full name** please?"})
+        return JSONResponse({
+            "reply": "Sure 😊 May I have your **full name** please?"
+        })
 
-    # ---------- NAME ----------
     if session["stage"] == "name":
-        if len(raw_message) < 3:
-            return JSONResponse({"reply": "Please enter a valid full name."})
-        session["name"] = raw_message
+        session["name"] = user_message
         session["stage"] = "phone"
-        return JSONResponse({"reply": "Thank you. Please share your **mobile number**."})
+        return JSONResponse({
+            "reply": "Thank you. Please share your **mobile number** 📞"
+        })
 
-    # ---------- PHONE ----------
     if session["stage"] == "phone":
-        phone = re.sub(r"\D", "", raw_message)
-        if len(phone) < 10:
-            return JSONResponse({"reply": "Please enter a valid 10-digit mobile number."})
-        session["phone"] = phone
+        if not re.fullmatch(r"\d{10}", user_message):
+            return JSONResponse({
+                "reply": "Please enter a valid **10-digit mobile number**."
+            })
+        session["phone"] = user_message
         session["stage"] = "date"
-        return JSONResponse({"reply": "Which **date** would you like the appointment? (Today / Tomorrow)"})
+        return JSONResponse({
+            "reply": "Which **date** would you like the appointment? (Today / Tomorrow)"
+        })
 
-    # ---------- DATE ----------
     if session["stage"] == "date":
-        session["date"] = raw_message
+        session["date"] = user_message
         session["stage"] = "time"
-        return JSONResponse({"reply": "What **time** do you prefer? (Morning / Evening)"})
+        return JSONResponse({
+            "reply": "What **time** do you prefer? (Morning / Evening)"
+        })
 
-    # ---------- TIME ----------
     if session["stage"] == "time":
-        session["time"] = raw_message
+        session["time"] = user_message
 
-        confirmation = f"""
-✅ **Appointment Request Received**
+        reply = (
+            "✅ **Appointment Request Received**\n\n"
+            f"👤 Name: {session['name']}\n"
+            f"📞 Phone: {session['phone']}\n"
+            f"📅 Date: {session['date']}\n"
+            f"⏰ Time: {session['time']}\n\n"
+            "Our clinic will contact you shortly. Thank you! 😊"
+        )
 
-👤 Name: {session['name']}
-📞 Phone: {session['phone']}
-📅 Date: {session['date']}
-⏰ Time: {session['time']}
-
-Our clinic will contact you shortly.
-Thank you!
-"""
-
-        # RESET SESSION
+        # Reset for next booking
         session.update({
             "stage": "start",
             "name": None,
@@ -88,18 +102,11 @@ Thank you!
             "time": None
         })
 
-        return JSONResponse({"reply": confirmation})
+        return JSONResponse({"reply": reply})
 
-    # ---------- FALLBACK (LLM ONLY BEFORE BOOKING) ----------
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": raw_message}
-        ],
-        temperature=0.3,
-        max_tokens=100
-    )
+    # -------- FALLBACK --------
+    return JSONResponse({
+        "reply": "I'm here to help you book a dental appointment 😊"
+    })
 
-    return JSONResponse({"reply": response.choices[0].message.content})
 
