@@ -6,7 +6,7 @@ Built with **FastAPI** + **OpenAI API** + vanilla HTML/JS frontend.
 
 ---
 
-## 🚀 Features
+## 🚀 Feature
 
 - 💬 Conversational chatbot for appointment booking
 - 🚨 Emergency detection (bleeding, severe pain) with instant alert
